@@ -469,7 +469,8 @@ function onDown(e) {
   const g = L.el.querySelector('g.strokes');
   activePath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
   activePath.setAttribute('fill', 'none');
-  activePath.setAttribute('stroke', toRgba(color, opacity));
+  activePath.setAttribute('stroke', color);
+  activePath.setAttribute('stroke-opacity', opacity);
   activePath.setAttribute('stroke-width', strokeWidth);
   activePath.setAttribute('stroke-linecap', 'round');
   activePath.setAttribute('stroke-linejoin', 'round');
@@ -503,7 +504,8 @@ function onUp() {
     activePath.setAttribute('d', d);
     L.paths.push({
       d,
-      stroke: toRgba(color, opacity),
+      hexColor: color,
+      opacity,
       strokeWidth,
       el: activePath
     });
@@ -566,7 +568,8 @@ function updateThumbs() {
         const pp = document.createElementNS('http://www.w3.org/2000/svg', 'path');
         pp.setAttribute('d', p.d);
         pp.setAttribute('fill', 'none');
-        pp.setAttribute('stroke', p.stroke);
+        pp.setAttribute('stroke', p.hexColor || '#000000');
+        pp.setAttribute('stroke-opacity', p.opacity !== undefined ? p.opacity : 1);
         pp.setAttribute('stroke-width', p.strokeWidth * 2);
         pp.setAttribute('stroke-linecap', 'round');
         mini.appendChild(pp);
@@ -618,36 +621,71 @@ function exportSVG(visibleOnly) {
   const toLayers = visibleOnly ? layers.filter(l => l.visible) : layers;
   if (!toLayers.length) { toast('No layers to export'); return; }
 
-  let svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">`;
-  svg += `<rect width="${w}" height="${h}" fill="white"/>`;
+  // Build SVG as a proper DOM so attributes are always valid
+  const ns = 'http://www.w3.org/2000/svg';
+  const xlns = 'http://www.w3.org/1999/xlink';
+  const root = document.createElementNS(ns, 'svg');
+  root.setAttribute('xmlns', ns);
+  root.setAttribute('xmlns:xlink', xlns);
+  root.setAttribute('width', w);
+  root.setAttribute('height', h);
+  root.setAttribute('viewBox', `0 0 ${w} ${h}`);
+
+  // White background
+  const bg = document.createElementNS(ns, 'rect');
+  bg.setAttribute('width', w); bg.setAttribute('height', h);
+  bg.setAttribute('fill', '#ffffff');
+  root.appendChild(bg);
 
   for (const L of toLayers) {
-    const gid = `layer_${L.id}_${L.name.replace(/[^a-zA-Z0-9]/g,'_')}`;
+    const g = document.createElementNS(ns, 'g');
+    g.setAttribute('id', `layer_${L.id}_${L.name.replace(/[^a-zA-Z0-9]/g,'_')}`);
+    g.setAttribute('inkscape:label', L.name); // Inkscape layer name
+    g.setAttribute('inkscape:groupmode', 'layer');
+
     if (L.type === 'photo') {
+      // Embed photo as base64 PNG
       const tmp = document.createElement('canvas');
-      const dpr = window.devicePixelRatio || 1;
       tmp.width = L.el.width; tmp.height = L.el.height;
       tmp.getContext('2d').drawImage(L.el, 0, 0);
-      const b64 = tmp.toDataURL('image/png');
-      svg += `<g id="${gid}"><image x="0" y="0" width="${w}" height="${h}" xlink:href="${b64}"/></g>`;
+      const img = document.createElementNS(ns, 'image');
+      img.setAttribute('x', 0); img.setAttribute('y', 0);
+      img.setAttribute('width', w); img.setAttribute('height', h);
+      img.setAttributeNS(xlns, 'xlink:href', tmp.toDataURL('image/png'));
+      g.appendChild(img);
+
     } else {
-      svg += `<g id="${gid}">`;
+      // True vector paths — stroke as hex + stroke-opacity separately
       for (const p of L.paths) {
-        svg += `<path d="${p.d}" fill="none" stroke="${p.stroke}" stroke-width="${p.strokeWidth}" stroke-linecap="round" stroke-linejoin="round"/>`;
+        if (!p.d) continue;
+        const el = document.createElementNS(ns, 'path');
+        el.setAttribute('d', p.d);
+        el.setAttribute('fill', 'none');
+        // stroke color must be hex for SVG compliance
+        el.setAttribute('stroke', p.hexColor || '#000000');
+        el.setAttribute('stroke-opacity', p.opacity !== undefined ? p.opacity : 1);
+        el.setAttribute('stroke-width', p.strokeWidth);
+        el.setAttribute('stroke-linecap', 'round');
+        el.setAttribute('stroke-linejoin', 'round');
+        g.appendChild(el);
       }
-      svg += `</g>`;
     }
+    root.appendChild(g);
   }
 
-  svg += '</svg>';
-  const blob = new Blob([svg], { type:'image/svg+xml' });
+  // Serialize to string
+  const serializer = new XMLSerializer();
+  const svgStr = serializer.serializeToString(root);
+  const blob = new Blob([svgStr], { type:'image/svg+xml;charset=utf-8' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
   a.download = visibleOnly ? 'drawing-visible.svg' : 'drawing-all.svg';
+  document.body.appendChild(a);
   a.click();
+  document.body.removeChild(a);
   URL.revokeObjectURL(url);
-  toast(visibleOnly ? 'Exported visible layers' : 'Exported all layers');
+  toast(visibleOnly ? 'Exported visible layers as SVG' : 'Exported all layers as SVG');
 }
 
 /* ── UI CONTROLS ── */
